@@ -1,15 +1,15 @@
+import collections
+import dataclasses
+import enum
+import typing as ty
+from abc import abstractmethod
 from datetime import datetime
+from typing import Protocol, runtime_checkable
 
 import frozendict as frozendict
+from Yandex import DiskAPI as ya
 from ordered_set import OrderedSet
 
-import dataclasses
-from Yandex import DiskAPI as ya
-import typing as ty
-import collections
-import enum
-from typing import Protocol, runtime_checkable
-from abc import abstractmethod
 
 # from ABC
 
@@ -45,6 +45,7 @@ class FileInfo(Resource):
     size: int
     md5: str
     sha256: str
+
     # hash: HashOfFile
 
     def __hash__(self):
@@ -179,57 +180,58 @@ class LocalFS(BaseFS, LocalExtFS):
     ...
 
 
-class YandexFS(BaseFS, RemoteFS):
-    resource_cache: dict[str, Resource]
-    disk: ya.Disk = None
-
-    def is_cached(self, path: str) -> bool:
-        return path in self.resource_cache
-
-    def _get_from_cache(self, path: str) -> Resource:
-        return self.resource_cache.get(path, None)
-
-    def _put_to_cache(self, resource: Resource):
-        # for item in list(resource):
-        self.resource_cache[resource.full_path] = resource
-
-    # def get_subitems(self, owner: str) -> ty.Iterable[Resource]:
-    #    ...
-    @classmethod
-    def _create_resource(cls, ya_resource: ya.Resource) -> Resource:
-        def items(res: Resource) -> ty.Iterable[Resource]:
-            ...
-
-        resource = Resource()
-        resource.items = items(resource)
-        return resource
-
-    def get(self, path: str) -> Resource:
-        if not self.is_cached(path):
-            status, response = self.disk.resource_info(path)
-            resource = self._create_resource(response)
-            self._put_to_cache(resource)
-        return self.resource_cache[path]
-
-    def mkdir(self, path: str):
-        self.disk.mkdir(path)
-
-    def rm(self, path: str):
-        self.disk.remove_resource(path)
-
-    def mv(self, path: str, target: str, overwrite: bool = False):
-        self.disk.move_resource(path, target, overwrite=overwrite)
-
-    def cp(self, path: str, target: str, overwrite: bool = False):
-        self.disk.copy_resource(path, target, overwrite=overwrite)
-
-    def _url_download(self, url: str, target: str):
-        ...
-
-    def download(self, path: str, target: str, overwrite: bool = False):
-        status, link = self.disk.download_resource(path)
-        self._url_download(link.href, target)
-
+#
+# class YandexFS(BaseFS, RemoteFS):
+#     resource_cache: dict[str, Resource]
+#     disk: ya.Disk = None
+#
+#     def is_cached(self, path: str) -> bool:
+#         return path in self.resource_cache
+#
+#     def _get_from_cache(self, path: str) -> Resource:
+#         return self.resource_cache.get(path, None)
+#
+#     def _put_to_cache(self, resource: Resource):
+#         # for item in list(resource):
+#         self.resource_cache[resource.full_path] = resource
+#
+#     # def get_subitems(self, owner: str) -> ty.Iterable[Resource]:
+#     #    ...
+#     @classmethod
+#     def _create_resource(cls, ya_resource: ya.Resource) -> Resource:
+#         def items(res: Resource) -> ty.Iterable[Resource]:
+#             ...
+#
+#         resource = Resource()
+#         resource.items = items(resource)
+#         return resource
+#
+#     def get(self, path: str) -> Resource:
+#         if not self.is_cached(path):
+#             status, response = self.disk.resource_info(path)
+#             resource = self._create_resource(response)
+#             self._put_to_cache(resource)
+#         return self.resource_cache[path]
+#
+#     def mkdir(self, path: str):
+#         self.disk.mkdir(path)
+#
+#     def rm(self, path: str):
+#         self.disk.remove_resource(path)
+#
+#     def mv(self, path: str, target: str, overwrite: bool = False):
+#         self.disk.move_resource(path, target, overwrite=overwrite)
+#
+#     def cp(self, path: str, target: str, overwrite: bool = False):
+#         self.disk.copy_resource(path, target, overwrite=overwrite)
+#
+#     def _url_download(self, url: str, target: str):
+#         ...
+#
+#     def download(self, path: str, target: str, overwrite: bool = False):
+#         status, link = self.disk.download_resource(path)
+#         self._url_download(link.href, target)
+#
 
 # class ResourceManagerYandex(ResourceManager):
 #     disk: api.Disk = None
@@ -306,7 +308,7 @@ class FSLayer(BaseFS):
 
 @dataclasses.dataclass
 class FileOnLayer:
-    resource: FileInfo
+    resource: FileInfo | None
     fs: FSLayer
 
 
@@ -316,6 +318,10 @@ class FSLayersPool(dict[str, FSLayer]):
 
     def find_file(self, full_pathname: str) -> list[FileOnLayer]:
         ...
+
+
+class CopyError(Exception):
+    ...
 
 
 class UnionFS:
@@ -364,19 +370,48 @@ class UnionFS:
         def inexpensive_sources_for_copyfrom(_from: FSLayer) -> tuple[str]:
             ...
 
-        def reasonsable_sources_for_copyfrom(
-            _from: FSLayer, strategy: str = "fastest"
-        ) -> tuple[str]:
+        def reasonsable_sources_for_copyto(
+            _from: list[FSLayer],
+            target: FSLayer,
+            strategy: str = "fastest",
+        ) -> list[FSLayer]:
             ...
 
         def select_newest_files_from(
             files: list[FileOnLayer],
         ) -> list[FileOnLayer] | None:
-            # def select_newest_resources_from(files: list[tuple[str,str]]) -> list[tuple[str,str]]:
             ...
 
-        def copy_from(sources: list[FileOnLayer], to_file: FileOnLayer) -> bool:
-            ...
+        def copy_from(sources: list[FileOnLayer], targets: list[FileOnLayer]):
+            """
+            Копирование файла из sources (выбрать лучший вариант), в слои targets
+            :param sources: Возможные источники с файлом
+            :type sources: список файла на разных слоях
+            :param targets:
+            :type targets:
+            :return:
+            :rtype:
+            """
+
+            def try_copy(source: FileOnLayer, target: FileOnLayer) -> bool:
+                raise NotImplemented
+
+            for target in targets:
+                for layer in reasonsable_sources_for_copyto(
+                    [flayer.fs for flayer in sources], target.fs
+                ):
+                    """
+                    Слои откуда копируем
+                    """
+                    copy_success = False
+                    for copy_source in [flayer for flayer in sources if flayer.fs is layer]:
+                        if not try_copy(copy_source, target):
+                            # Копирование не удалось, пробуем из другого слоя
+                            continue
+                        copy_success = True
+                        break
+                    if not copy_success:
+                        raise CopyError
 
         # def cost_copy(to_fs: BaseFS) -> tuple[int]:
         #     """
@@ -424,7 +459,7 @@ class UnionFS:
         Если не найден, помещаем в цепочку None (помечаем F1 как отсутствующий). Помечаем цепочку как неуспешную. 
         Повторяем для файла F и всех слоев пула. 
         Если F1 найден, помещаем в цепочку, сравниваем хэш F и F1. 
-        Если хэш совпал считаем что слои  N b N1 по файлу F равны, если хэш не совпал помечаем помечаем цепочку как неуспешную.  
+        Если хэш совпал считаем что слои  N и N1 по файлу F равны, если хэш не совпал помечаем помечаем цепочку как неуспешную.  
         Повторяем для файла F и всех слоев пула. 
         Если для всех слоев S сравнение успешно, помечаем цепочку F..F[S] как успешную. 
         2. Повторяем 1 для всех файлов в слое ранее не вошедших в цепочки.
@@ -457,17 +492,18 @@ class UnionFS:
             ...
 
         layer_num = 0
-        layers = self.layers.items()
+        layers_items = self.layers.items()
         unsuccessful_chains: set[list[FileInfo | None]] = set()
         manual_control_needed = []
-        for layer_name1, layer1 in layers:
-            for file_1 in layer1.ls():
+        for layer_name1, layer1 in layers_items:
+            layer1_ls = layer1.ls()
+            for file_1 in layer1_ls:
                 chain = []
                 flayer1 = FileOnLayer(file_1, layer1)
                 if in_blacklist(file_1):
                     continue
                 chain += file_1
-                for layer_name2, layer2 in layers[layer_num + 1 :]:
+                for layer_name2, layer2 in layers_items[layer_num + 1 :]:
                     if not (file_2 := layer2.get(file_1.full_name)):
                         chain += None
                         unsuccessful_chains += chain
@@ -481,26 +517,26 @@ class UnionFS:
             unsuccessful_chains, key=len, reverse=True
         )
 
-        del layers
-        layers = list(self.layers.values())
+        layers_values = list(self.layers.values())
         for chain in unsuccessful_chains:
             source_for_select = []
-            copy_to_targets = []
+            targets_for_copy = []
             for layer_num, file1 in enumerate(chain):
                 if file1 is None:
-                    copy_to_targets += FileOnLayer(None, layers[layer_num])
+                    targets_for_copy += FileOnLayer(None, layers_values[layer_num])
                 else:
-                    source_for_select += FileOnLayer(file1, layers[layer_num])
+                    source_for_select += FileOnLayer(file1, layers_values[layer_num])
 
             if not (source_for_copy := select_newest_files_from(source_for_select)):
                 # Не смогли выбрать самые актуальные
                 manual_control_needed += chain
-                continue
-            for layer_num, file1 in enumerate(chain):
-                if file1 is None:
-                    ...
+            else:
+                copy_from(source_for_copy, targets_for_copy)
 
-            copy_from(source_for_copy)
+            # unsuccessful_chains -= chain
+            # for layer_num, file1 in enumerate(chain):
+            #     if file1 is None:
+            #         ...
 
 
 #
@@ -574,9 +610,7 @@ class VirtualFS:
         """
         ...
 
-    def attach_fs(
-        self, fs: BaseFS, key_fs: str, mount_point: str, property: dict = None
-    ):
+    def attach_fs(self, fs: BaseFS, key_fs: str, mount_point: str, property: dict = None):
         """
         Присоединить файловую систему к пулу
         Parameters
@@ -588,12 +622,13 @@ class VirtualFS:
         -------
 
         """
-        self._calculate_hash_fs(fs)
+        # self._calculate_hash_fs(fs)
 
-        ...
+        # ..
 
     def get_manager(self, path: str) -> BaseFS:
-        return self.fstab[path]
+        ...
+        # return self.fstab[path]
 
     #
     # def walk(
