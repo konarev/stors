@@ -1,4 +1,3 @@
-import collections
 import dataclasses
 import enum
 import typing as ty
@@ -6,9 +5,10 @@ from abc import abstractmethod
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-import frozendict as frozendict
-from Yandex import DiskAPI as ya
-from ordered_set import OrderedSet
+import dataclasses
+
+
+# from Yandex import DiskAPI as ya
 
 
 # from ABC
@@ -42,6 +42,10 @@ class Resource:
 
 @dataclasses.dataclass
 class FileInfo(Resource):
+    # modified: datetime
+    # created: datetime
+    # name: str
+    # path: str
     size: int
     md5: str
     sha256: str
@@ -111,7 +115,7 @@ class TypeMedia(enum.Enum):
     cloud = enum.auto()
 
 
-class BaseFS(Protocol):
+class BaseFS:
     @abstractmethod
     def touch(self, path_to_file: str):
         ...
@@ -159,7 +163,7 @@ class RemoteFS(Protocol):
 
 
 @runtime_checkable
-class LocalExtFS(Protocol):
+class LocalExtFS:
     ...
 
 
@@ -266,14 +270,14 @@ class LocalFS(BaseFS, LocalExtFS):
 # MountPoint: ty.TypeAlias = str
 
 
-# @dataclasses.dataclass
+@dataclasses.dataclass
 class FSLayer(BaseFS):
     key: str
     fs: BaseFS
     params: dict
 
-    def __hash__(self):
-        return hash(self.key)
+    # def __hash__(self):
+    #     return hash(self.key)
 
     # @classmethod
     def find_file(self, full_filename: str) -> FileInfo | None:
@@ -324,11 +328,24 @@ class CopyError(Exception):
     ...
 
 
-class UnionFS:
+@dataclasses.dataclass
+class Node:
     # layers: dict[str, BaseFS] = {}
-    layers: FSLayersPool
+    name: str
+    path: str
+    layers: list[FSLayer]
     # слои FS, ключ - имя слоя уникальное имя
     mode: ty.Literal["mirror", "union"] = "mirror"
+
+
+@dataclasses.dataclass
+class UnionFS:
+    # layers: dict[str, BaseFS] = {}
+    # layers: FSLayer
+    # слои FS, ключ - имя слоя уникальное имя
+    # mode: ty.Literal["mirror", "union"] = "mirror"
+    root: str
+    nodes: list[Node]
 
     # mirror - Зеркальные копии
     # union - слои присоединенных FS образуют общую FS
@@ -337,7 +354,7 @@ class UnionFS:
     # Файл с одним full_name/hash на всех слоях FS, None - файла в слое нет
     # длина кортежа равна длине словаря layers, позиция в кортеже соответствует позиции в layers
 
-    def sync(self):
+    def sync(self, node: Node = None):
         """
         В режиме mirror - каждый слой копия других
         Returns
@@ -375,12 +392,16 @@ class UnionFS:
             target: FSLayer,
             strategy: str = "fastest",
         ) -> list[FSLayer]:
-            ...
+            # TODO: доделать
+            return _from
 
         def select_newest_files_from(
             files: list[FileOnLayer],
         ) -> list[FileOnLayer] | None:
-            ...
+            # for flayer in files:
+            return sorted(
+                files, key=lambda flayer: flayer.resource.modified, reverse=True
+            )
 
         def copy_from(sources: list[FileOnLayer], targets: list[FileOnLayer]):
             """
@@ -404,7 +425,9 @@ class UnionFS:
                     Слои откуда копируем
                     """
                     copy_success = False
-                    for copy_source in [flayer for flayer in sources if flayer.fs is layer]:
+                    for copy_source in [
+                        flayer for flayer in sources if flayer.fs is layer
+                    ]:
                         if not try_copy(copy_source, target):
                             # Копирование не удалось, пробуем из другого слоя
                             continue
@@ -491,84 +514,88 @@ class UnionFS:
         def in_blacklist(file: FileInfo) -> bool:
             ...
 
-        layer_num = 0
-        layers_items = self.layers.items()
-        unsuccessful_chains: set[list[FileInfo | None]] = set()
-        manual_control_needed = []
-        for layer_name1, layer1 in layers_items:
-            layer1_ls = layer1.ls()
-            for file_1 in layer1_ls:
-                chain = []
-                flayer1 = FileOnLayer(file_1, layer1)
-                if in_blacklist(file_1):
-                    continue
-                chain += file_1
-                for layer_name2, layer2 in layers_items[layer_num + 1 :]:
-                    if not (file_2 := layer2.get(file_1.full_name)):
-                        chain += None
-                        unsuccessful_chains += chain
+        _nodes = self.nodes if node is None else [node]
 
-                    else:
-                        chain += file_2
-                        if file_1 != file_2:
+        for _node in _nodes:
+            layer_num = 0
+            layers_items = _node.layers.items()
+            unsuccessful_chains: set[list[FileInfo | None]] = set()
+            manual_control_needed = []
+            for layer_name1, layer1 in layers_items:
+                layer1_ls = layer1.ls()
+                for file_1 in layer1_ls:
+                    chain = []
+                    flayer1 = FileOnLayer(file_1, layer1)
+                    if in_blacklist(file_1):
+                        continue
+                    chain += file_1
+                    for layer_name2, layer2 in layers_items[layer_num + 1 :]:
+                        if not (file_2 := layer2.get(file_1.full_name)):
+                            chain += None
                             unsuccessful_chains += chain
 
-        unsuccessful_chains: list[list[FileInfo | None]] = sorted(
-            unsuccessful_chains, key=len, reverse=True
-        )
+                        else:
+                            chain += file_2
+                            if file_1 != file_2:
+                                unsuccessful_chains += chain
 
-        layers_values = list(self.layers.values())
-        for chain in unsuccessful_chains:
-            source_for_select = []
-            targets_for_copy = []
-            for layer_num, file1 in enumerate(chain):
-                if file1 is None:
-                    targets_for_copy += FileOnLayer(None, layers_values[layer_num])
+            unsuccessful_chains: list[list[FileInfo | None]] = sorted(
+                unsuccessful_chains, key=len, reverse=True
+            )
+
+            layers_values = list(self.layers.values())
+            for chain in unsuccessful_chains:
+                source_for_select = []
+                targets_for_copy = []
+                for layer_num, file1 in enumerate(chain):
+                    if file1 is None:
+                        targets_for_copy += FileOnLayer(None, layers_values[layer_num])
+                    else:
+                        source_for_select += FileOnLayer(
+                            file1, layers_values[layer_num]
+                        )
+
+                if not (source_for_copy := select_newest_files_from(source_for_select)):
+                    # Не смогли выбрать самые актуальные
+                    manual_control_needed += chain
                 else:
-                    source_for_select += FileOnLayer(file1, layers_values[layer_num])
+                    copy_from(source_for_copy, targets_for_copy)
 
-            if not (source_for_copy := select_newest_files_from(source_for_select)):
-                # Не смогли выбрать самые актуальные
-                manual_control_needed += chain
-            else:
-                copy_from(source_for_copy, targets_for_copy)
+                # unsuccessful_chains -= chain
+                # for layer_num, file1 in enumerate(chain):
+                #     if file1 is None:
+                #         ...
 
-            # unsuccessful_chains -= chain
-            # for layer_num, file1 in enumerate(chain):
-            #     if file1 is None:
-            #         ...
-
-
-#
-# processed_file = []
-# for layer_name1, layer1 in self.layers.items():
-#     for file_1 in layer1.ls():  # ls_files(layer1):
-#         list_file_on_layers = self.layers.find_file(file_1.full_name)
-#         if len(list_file_on_layers) == len(self.layers):
-#             # Найден на всех слоях
-#             processed_file += file_1
-#             continue
-#         newest_files = select_newest_resources_from(list_file_on_layers)
-#         # for layer_name2, layer2 in self.layers.items():
-#         #     layer2.find_file()
-#         #     file_on_layer = next(
-#         #         (
-#         #             file_on_layer
-#         #             for file_on_layer in list_file_on_layers
-#         #             if file_on_layer.fs == layer2
-#         #         ),
-#         #         None,
-#         #     )  # Поиск файла на слое
-#         dt = {}
-#         if file_on_layer is None or file_on_layer not in newest_files:
-#             # Если файл отсутствует, или он устаревший
-#             sources = reasonsable_sources_for_copyfrom(layer2)
-#             for sources in sources:
-#                 if not layer_available(sources):
-#                     continue
-#                 sources.cp(
-#                     file_1.full_name,
-#                 )
+    #
+    # processed_file = []
+    # for layer_name1, layer1 in self.layers.items():
+    #     for file_1 in layer1.ls():  # ls_files(layer1):
+    #         list_file_on_layers = self.layers.find_file(file_1.full_name)
+    #         if len(list_file_on_layers) == len(self.layers):
+    #             # Найден на всех слоях
+    #             processed_file += file_1
+    #             continue
+    #         newest_files = select_newest_resources_from(list_file_on_layers)
+    #         # for layer_name2, layer2 in self.layers.items():
+    #         #     layer2.find_file()
+    #         #     file_on_layer = next(
+    #         #         (
+    #         #             file_on_layer
+    #         #             for file_on_layer in list_file_on_layers
+    #         #             if file_on_layer.fs == layer2
+    #         #         ),
+    #         #         None,
+    #         #     )  # Поиск файла на слое
+    #         dt = {}
+    #         if file_on_layer is None or file_on_layer not in newest_files:
+    #             # Если файл отсутствует, или он устаревший
+    #             sources = reasonsable_sources_for_copyfrom(layer2)
+    #             for sources in sources:
+    #                 if not layer_available(sources):
+    #                     continue
+    #                 sources.cp(
+    #                     file_1.full_name,
+    #                 )
 
 
 class FStab:
@@ -610,7 +637,9 @@ class VirtualFS:
         """
         ...
 
-    def attach_fs(self, fs: BaseFS, key_fs: str, mount_point: str, property: dict = None):
+    def attach_fs(
+        self, fs: BaseFS, key_fs: str, mount_point: str, property: dict = None
+    ):
         """
         Присоединить файловую систему к пулу
         Parameters
@@ -763,11 +792,23 @@ class VirtualFS:
 
 
 if __name__ == "__main__":
-    import os
+    import pathlib
 
-    if "YDISK_TOKEN" not in os.environ:
-        raise ValueError("Не найдена переменная окружения 'YDISK_TOKEN'")
+    # if "YDISK_TOKEN" not in os.environ:
+    #    raise ValueError("Не найдена переменная окружения 'YDISK_TOKEN'")
 
-    _yandex_token = os.environ["YDISK_TOKEN"]
+    # _yandex_token = os.environ["YDISK_TOKEN"]
 
     # disk = DiskAPI.VirtualFS(_yandex_token)
+
+    # os.path.dirname(os.path.realpath(sys.argv[0]) if sys.argv[0] else None
+    PROJECT_DIR = pathlib.Path.home() + "/Development/python/stors"
+    TEST_DATA_DIR = pathlib.Path.home() + "/Development/python/stors/Tests/Data"
+
+    layer1 = FSLayer()
+    local_node = Node("test_node", [], "mirror")
+
+    vfs = UnionFS(
+        TEST_DATA_DIR,
+        [Node("Folder1", "/Folder1", [FSLayer()], "mirror")],
+    )
